@@ -34,8 +34,15 @@ public class Server {
      */
     private final StringBuilder password = new StringBuilder();
 
+    /**
+     * Difficulté en cours
+     */
     private int difficulteEnCours;
-    private Thread reception;
+
+    /**
+     * Etat clients
+     */
+    private String etat;
 
     /**
      * Lancement du serveur
@@ -46,6 +53,9 @@ public class Server {
         // l'invite de commande et l'écoute du serveur
             new Thread(() ->{
             try (ServerSocket serverSocket = new ServerSocket(port)){
+
+                //Initialisation de l'état
+                etat = "En attente";
 
                 //Génération d'un mot de passe aléatoire
                 Random rand = new Random();
@@ -106,12 +116,15 @@ public class Server {
                 PrintWriter out = new PrintWriter(client.getOutputStream(), true);
                 out.println("CANCELLED");
                 out.flush();
+
+                etat = "En attente";
             }
 
 
-        } else if (("status").equals(cmd)) {
-            for (Socket client : clients) {
-                System.out.println("Client: " + client.getInetAddress().getHostAddress() + ":" + client.getPort() );
+        } else if (("STATUS").equals(cmd)) {
+
+            for (Socket client : clientsConnectes) {
+                System.out.println("Client: " + client.getInetAddress().getHostAddress() + ":" + client.getPort() + " : " + etat);
             }
         } else if (cmd.startsWith("WHO_ARE_YOU_?")) {
             for (Socket client : clients) {
@@ -168,8 +181,12 @@ public class Server {
                     }
                 }
             }
+
+            //Vider la liste des clients non connectés
+            clients.clear();
         } else if (cmd.startsWith("NONCE")) {
             //Commande NONCE
+
             int nbClient = clientsConnectes.size();
             int incrClient = 0;
 
@@ -246,30 +263,38 @@ public class Server {
 
                 out.println("SOLVE " + diff);
                 out.flush();
+
+                etat = "En cours de recherche...";
             }
 
 
-                //Atomic
-                AtomicReference<String> solution = new AtomicReference<>();
+
+
+                System.out.println("-=-=(=)=-=-");
+                System.out.println("En attente de la solution...");
+                AtomicReference<String> solution = new AtomicReference<>("");
 
                 //Réception de la solution (on crée un thread pour parraléliser la réception de chaque client)
                 for (Socket client : clientsConnectes) {
-                    reception = new Thread(() -> {
-                        try (BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));) {
-
-                            System.out.println("-=-=(=)=-=-");
-                            System.out.println("En attente de la solution...");
+                    Thread reception = new Thread(() -> {
+                        try {
+                            BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
 
                             solution.set(in.readLine());
                             if (solution.get().startsWith("FOUND")) {
-
                                 //Envoi de la commande CANCELLED à chaque client qui va permettre l'arrêt de tous les tâches en cours
-                                for (Socket otherClient : clientsConnectes) {
-                                    try (PrintWriter otherOut = new PrintWriter(otherClient.getOutputStream(), true)) {
-                                        System.out.println("envoi du cancel");
-                                        otherOut.println("CANCELLED");
-                                        otherOut.flush();
+
+                                clientsConnectes.forEach(socket -> {
+                                    try {
+                                        PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+                                        out.println("CANCELLED");
+                                        out.flush();
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
                                     }
+                                });
+
+                                etat = "En attente";
 
                                     //Affichage de la solution trouvée
                                     System.out.println("Solution trouvee par un client");
@@ -290,27 +315,26 @@ public class Server {
                                     //On envoie la solution avec les valeurs trouvées
                                     String body = "{\"d\": \"" + difficulteEnCours + "\",\"n\": \"" + hash + "\", \"h\": \"" + nonce + "\"}";
                                     postRequest(url, headers, body);
+                                    System.out.print("$ ");
 
-                                    //Arrêt thread
-                                    reception.interrupt();
-                                }
                             }
-
                         } catch (IOException e) {
                             e.printStackTrace();
+
+                            System.out.print("$ ");
                         }
                     });
+                    reception.start();
                 }
-
-                //Lancement du thread de réception
-            reception.start();
-
                 //Commande Help pour afficher les commandes disponibles
         } else if(("HELP").equals(cmd.trim())) {
-            System.out.println(" - STATUS - display informations about connected workers");
-            System.out.println(" - NONCE - lancer une recherche de nonce");
-            System.out.println(" - HELP - describe available commands");
-            System.out.println(" - QUIT - terminate pending work and quit");
+            System.out.println("Commandes disponibles :");
+            System.out.println(" - WHO_ARE_YOU_? - demander aux clients de s'identifier");
+            System.out.println(" - STATUS - afficher l'état des clients connectés");
+            System.out.println(" - NONCE | PAYLOAD {h} | SOLVE {d} DANS L'ORDRE lance le minage");
+            System.out.println(" - HELP - afficher les commandes disponibles");
+            System.out.println(" - CANCELLED - arrêter le travail en cours de tous les clients connectés");
+            System.out.println(" - QUIT - fermer la console");
 
         } else {
             //Commande inconnue
